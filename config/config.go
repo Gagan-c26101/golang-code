@@ -46,9 +46,9 @@ func LoadConfig() {
 		SendgridApiKey:     getEnv("SENDGRID_API_KEY", "defaultSecret"),
 		SendgridSenderMail: getEnv("SENDGRID_MAIL_FROM", "defaultSecret"),
 		SandgridSenderName: getEnv("SENDGRID_MAIL_NAME", "defaultSecret"),
-		SandboxApiURL:      getEnv("SANDBOX_API_URL", "https://api.sandbox.credpay.io/v1/"),
-		SandboxApiKey:      getEnv("SANDBOX_API_KEY", "key_live_HZYsCB58PuDIMsyhCW2Uvxq576V6Pr6n"),
-		SandboxSecretKey:   getEnv("SANDBOX_SECRET_KEY", "secret_live_6GBggEXGr5OCxbVXpuwESvKcHXFcQ7MZ"),
+		SandboxApiURL:      getEnv("SANDBOX_API_URL", "actual key"),
+		SandboxApiKey:      getEnv("SANDBOX_API_KEY", "actual key"),
+		SandboxSecretKey:   getEnv("SANDBOX_SECRET_KEY", "actual key"),
 		SandboxApiVersion:  getEnv("SANDBOX_API_VERSION", "2.0"),
 	}
 
