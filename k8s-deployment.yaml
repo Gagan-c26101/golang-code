@@ -1,41 +1,36 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: credbull-user-deployment
+  name: user-deployment
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: credbull-user
+      app: user
   template:
     metadata:
       labels:
-        app: credbull-user
+        app: user
     spec:
       containers:
-        - name: credbull-user-container
-          image: credbull-user-app
+        - name: user-container
+          image: user-app
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:
             - configMapRef:
-                name: credbull-env
-          env:
-             - name: REDIS_HOST
-               value: redis
-             - name: REDIS_PORT
-               value: "6379"
-
+                name: env
+          
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: credbull-user-service
+  name: user-service
 spec:
   selector:
-    app: credbull-user
+    app: user
   ports:
     - protocol: TCP
       port: 80

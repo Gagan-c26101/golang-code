@@ -12,7 +12,7 @@ type User struct {
 	ProfileImage        string     `gorm:"default:''"`
 	Name                string     `gorm:"default:''"`
 	Email               string     `gorm:"unique;not null"`
-	Mobile              string     `gorm:"default:''"`
+	Mobile              string     `gorm:"unique;default:''"`
 	Role                string     `gorm:"default:'USER'"` // Default role is USER
 	Password            string     `gorm:"not null"`
 	BankDetails         uint       `gorm:"foreignKey:BankID"` // Corrected foreign key reference
@@ -20,6 +20,8 @@ type User struct {
 	IsMobileVerified    bool       `gorm:"default:false"`
 	IsEmailVerified     bool       `gorm:"default:false"`
 	LastLogin           time.Time  `gorm:"default:NULL"`
+	IsTwoFAEnabled      bool       `json:"is_twofa_enabled" gorm:"default:false"`
+	TwoFASecret         string     `json:"-"`
 	FailedLoginAttempts int        `gorm:"default:0"`
 	LastFailedLogin     *time.Time `json:"last_failed_login"`
 	IsBlocked           bool       `gorm:"default:false"`
@@ -28,12 +30,16 @@ type User struct {
 }
 
 type ContactChangeTracking struct {
-	UserID    uint      `gorm:"foreignKey:UserID"`
-	OldEmail  string    `gorm:"default:''"`
-	NewEmail  string    `gorm:"default:''"`
-	OldMobile string    `gorm:"default:''"`
-	NewMobile string    `gorm:"default:''"`
-	ChangedAt time.Time `gorm:"autoCreateTime"`
-	IPAddress string    `gorm:"default:''"`
-	UserAgent string    `gorm:"default:''"`
+	gorm.Model
+	UserID        uint      `gorm:"foreignKey:UserID"`
+	OldEmail      string    `gorm:"default:''"`
+	NewEmail      string    `gorm:"default:''"`
+	OldMobile     string    `gorm:"default:''"`
+	NewMobile     string    `gorm:"default:''"`
+	IsOldVerified bool      `gorm:"default:false"`
+	IsCompleted   bool      `gorm:"default:false"`
+	ExpiresAt     time.Time `gorm:"not null" json:"expires_at"`
+	ChangedAt     time.Time `gorm:"autoCreateTime"`
+	IPAddress     string    `json:"ip_address"`
+	Device        string    `json:"device"`
 }

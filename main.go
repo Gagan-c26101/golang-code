@@ -3,7 +3,7 @@ package main
 import (
 	"fib/config"
 	"fib/database"
-	"fib/routers/adminRoutes"
+	"fib/jobs"
 	authRoutes "fib/routers/authRoutes"
 	userProfileRoutes "fib/routers/userRoutes"
 	"log"
@@ -17,7 +17,8 @@ func main() {
 	config.LoadConfig()
 	database.ConnectDb()
 
-	config.ConnectRedis()
+	// Start OTP cleanup job
+	jobs.StartOTPCleanupJob()
 
 	app := fiber.New()
 
@@ -37,7 +38,6 @@ func main() {
 
 	authRoutes.SetupAuthRoutes(app)
 	userProfileRoutes.SetupUserRoutes(app)
-	adminRoutes.SetupAdminRoutes(app)
 
 	log.Printf("Server is running on port %s", config.AppConfig.Port)
 	log.Fatal(app.Listen(":" + config.AppConfig.Port))

@@ -13,14 +13,31 @@ import (
 // var jwtSecret = []byte("asdfasqsdfgsdasdfasdfawqe") // Replace with your actual secret key
 
 // GenerateJWT generates a JWT token for the user
-func GenerateJWT(userID uint, name, role string) (string, error) {
+func GenerateJWT(userID uint, name, role, platform string) (string, error) {
+	var expDuration time.Duration
+	// if strings.ToLower(strings.TrimSpace(platform)) == "mobile" {
+	// 	expDuration = 7 * 24 * time.Hour
+	// } else {
+	// 	expDuration = 24 * time.Hour
+	// }
+
+	cleanPlatform := strings.ToLower(strings.TrimSpace(platform))
+
+	if cleanPlatform == "mobile" {
+		expDuration = 7 * 24 * time.Hour
+		fmt.Printf("JWT generated for MOBILE user_id=%d, expiry=%v", userID, expDuration)
+	} else {
+		expDuration = 24 * time.Hour
+		fmt.Printf("JWT generated for WEB user_id=%d, expiry=%v", userID, expDuration)
+	}
+
 	// Set claims
 	claims := jwt.MapClaims{
-		"userId": userID,                                // User ID
-		"name":   name,                                  // Name of the user
-		"role":   role,                                  // User role
-		"iat":    time.Now().Unix(),                     // Issued at (current timestamp)
-		"exp":    time.Now().Add(24 * time.Hour).Unix(), // Expiry (24 hours from now)
+		"userId": userID,                             // User ID
+		"name":   name,                               // Name of the user
+		"role":   role,                               // User role
+		"iat":    time.Now().Unix(),                  // Issued at (current timestamp)
+		"exp":    time.Now().Add(expDuration).Unix(), // Expiry based on platform
 	}
 
 	// Create the token
@@ -87,55 +104,62 @@ func JWTMiddleware(c *fiber.Ctx) error {
 	return c.Next()
 }
 
+// GenerateTempToken generates a short-lived JWT
+func GenerateTempToken(userID uint, purpose string) (string, error) {
+	claims := jwt.MapClaims{
+		"userId":  userID,
+		"purpose": purpose,                                // dynamic purpose
+		"iat":     time.Now().Unix(),                      // issued at
+		"exp":     time.Now().Add(5 * time.Minute).Unix(), // hardcoded 5 minutes expiry
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(config.AppConfig.JWTKey))
+}
+
+// TempTokenMiddleware validates a temporary token for a specific purpose
+func TempTokenMiddleware(expectedPurpose string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		auth := c.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			return JsonResponse(c, fiber.StatusUnauthorized, false, "Missing temporary token", nil)
+		}
+
+		tokenStr := strings.TrimPrefix(auth, "Bearer ")
+		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+			return []byte(config.AppConfig.JWTKey), nil
+		})
+
+		if err != nil || !token.Valid {
+			return JsonResponse(c, fiber.StatusUnauthorized, false, "Invalid or expired temporary token", nil)
+		}
+
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			return JsonResponse(c, fiber.StatusUnauthorized, false, "Invalid token claims", nil)
+		}
+		// fmt.Println("Temp token claims:", claims)
+
+		if claims["purpose"] != expectedPurpose {
+			return JsonResponse(c, fiber.StatusUnauthorized, false, "Invalid token purpose", nil)
+		}
+
+		userID, ok := claims["userId"].(float64)
+		if !ok {
+			return JsonResponse(c, fiber.StatusUnauthorized, false, "Invalid user in token", nil)
+		}
+
+		c.Locals("userId", uint(userID))
+		return c.Next()
+	}
+}
+
 func JsonResponse(c *fiber.Ctx, statusCode int, status bool, message string, data interface{}) error {
 	return c.Status(statusCode).JSON(fiber.Map{
 		"status":  status,
 		"message": message,
 		"data":    data,
 	})
-}
-func Admin(c *fiber.Ctx) error {
-	// Get JWT token from the context (assumes JWTMiddleware ran before)
-	authHeader := c.Get("Authorization")
-	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"status":  false,
-			"message": "Unauthorized",
-		})
-	}
-
-	tokenString := authHeader[len("Bearer "):]
-
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(config.AppConfig.JWTKey), nil
-	})
-	if err != nil || !token.Valid {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"status":  false,
-			"message": "Invalid or expired token",
-		})
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok || claims["role"] == nil {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-			"status":  false,
-			"message": "Access denied",
-		})
-	}
-
-	// Check if role is admin
-	if claims["role"] != "admin" {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-			"status":  false,
-			"message": "Admin access only",
-		})
-	}
-
-	return c.Next()
 }
 
 func ValidationErrorResponse(c *fiber.Ctx, errors map[string]string) error {

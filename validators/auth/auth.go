@@ -8,60 +8,122 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// Helper to validate email format
 func isValidEmail(email string) bool {
 	re := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 	return re.MatchString(email)
 }
 
-// Helper to validate mobile number format
 func isValidMobile(mobile string) bool {
-	re := regexp.MustCompile(`^\d{10}$`)
+	re := regexp.MustCompile(`^\+[1-9][0-9]{0,3}[0-9]{7,15}$`)
 	return re.MatchString(mobile)
+}
+
+func cleanEmail(s string) string {
+	return strings.ReplaceAll(strings.TrimSpace(s), " ", "")
+}
+
+func cleanMobile(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == ' ' || r == '-' || r == '(' || r == ')' || r == '.' {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(s))
+}
+
+func validateSingleCredential(email, mobile, emailKey, mobileKey string, errors map[string]string) {
+	if email != "" && mobile != "" {
+		errors["credentials"] = "Send OTP either to email OR mobile, not both!"
+		return
+	} else if email == "" && mobile == "" {
+		errors["credentials"] = "Either email or mobile number is required!"
+		return
+	}
+	if email != "" && !isValidEmail(email) {
+		errors[emailKey] = "Invalid email!"
+	}
+	if mobile != "" && !isValidMobile(mobile) {
+		errors[mobileKey] = "Invalid mobile number!"
+	}
+}
+
+func validatePassword(password, key string, errors map[string]string) {
+	trimmed := strings.TrimSpace(password)
+	if len(trimmed) == 0 {
+		errors[key] = "Password is required!"
+		return
+	}
+	if len(trimmed) < 8 || len(trimmed) > 32 {
+		errors[key] = "Password must be between 8 and 32 characters long!"
+		return
+	}
+
+	var hasLower, hasUpper, hasNumber, hasSpecial bool
+
+	for _, ch := range trimmed {
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			hasLower = true
+		case ch >= 'A' && ch <= 'Z':
+			hasUpper = true
+		case ch >= '0' && ch <= '9':
+			hasNumber = true
+		default:
+			hasSpecial = true
+		}
+	}
+	if !hasLower || !hasUpper || !hasNumber || !hasSpecial {
+		errors[key] = "Password must contain mix of [A-Z],[a-z],[0-9],special character(eg.@#$%)"
+	}
 }
 
 // Signup validator middleware
 func Signup() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// user := new(models.User)
 		reqData := new(struct {
-			Mobile   string `json:"mobile"`
-			Email    string `json:"email"`
-			Password string `json:"password"`
-			Name     string `json:"name"`
+			FirstName   string `json:"firstName"`
+			LastName    string `json:"lastName"`
+			CountryCode string `json:"countryCode"`
+			Mobile      string `json:"mobile"`
+			Email       string `json:"email"`
+			Password    string `json:"password"`
 		})
 		if err := c.BodyParser(reqData); err != nil {
 			return middleware.JsonResponse(c, fiber.StatusBadRequest, false, "Invalid request body!", nil)
 		}
-
 		errors := make(map[string]string)
-
-		// Validate Name
-		if len(strings.TrimSpace(reqData.Name)) < 5 {
-			errors["name"] = "Name must be at least 5 characters long!"
+		// Trim fields
+		reqData.FirstName = strings.TrimSpace(reqData.FirstName)
+		reqData.LastName = strings.TrimSpace(reqData.LastName)
+		reqData.Email = cleanEmail(reqData.Email)
+		reqData.CountryCode = strings.TrimSpace(reqData.CountryCode)
+		cleanNumber := cleanMobile(reqData.Mobile)
+		if reqData.CountryCode == "" {
+			errors["countryCode"] = "Country code is required!"
 		}
-
-		// Validate Email
+		// Ensure country code starts with '+'
+		if !strings.HasPrefix(reqData.CountryCode, "+") && reqData.CountryCode != "" {
+			reqData.CountryCode = "+" + reqData.CountryCode
+		}
+		fullMobile := reqData.CountryCode + cleanNumber
+		reqData.Mobile = fullMobile
+		if reqData.FirstName == "" {
+			errors["firstName"] = "First Name is required!"
+		}
+		if reqData.LastName == "" {
+			errors["lastName"] = "Last Name is required!"
+		}
 		if reqData.Email == "" || !isValidEmail(reqData.Email) {
 			errors["email"] = "Invalid email!"
 		}
-
-		// Validate Mobile
-		if reqData.Mobile == "" || !isValidMobile(reqData.Mobile) {
-			errors["mobile"] = "Invalid mobile number!"
+		if reqData.Mobile != "" && !isValidMobile(reqData.Mobile) {
+			errors["mobile"] = "Invalid mobile format! Please include country code (e.g., +91 XXXXXXXXXX)."
 		}
-
-		// Validate Password
-		if len(strings.TrimSpace(reqData.Password)) < 8 {
-			errors["password"] = "Password must be at least 8 characters long!"
-		}
-
-		// Respond with errors if any exist
+		validatePassword(reqData.Password, "password", errors)
 		if len(errors) > 0 {
 			return middleware.ValidationErrorResponse(c, errors)
 		}
-
-		// Pass validated user to the next middleware
+		// Pass cleaned and validated data forward
 		c.Locals("validatedUser", reqData)
 		return c.Next()
 	}
@@ -74,36 +136,41 @@ func Login() fiber.Handler {
 			Mobile   string `json:"mobile"`
 			Email    string `json:"email"`
 			Password string `json:"password"`
+			Platform string `json:"platform"`
 		})
 		if err := c.BodyParser(reqData); err != nil {
 			return middleware.JsonResponse(c, fiber.StatusBadRequest, false, "Invalid request body!", nil)
 		}
-
 		errors := make(map[string]string)
-
-		// Validate credentials
+		// Trim and clean
+		reqData.Email = cleanEmail(reqData.Email)
+		reqData.Mobile = cleanMobile(reqData.Mobile)
+		reqData.Password = strings.TrimSpace(reqData.Password)
 		if reqData.Email == "" && reqData.Mobile == "" {
 			errors["credentials"] = "Either email or mobile number is required!"
 		} else {
 			if reqData.Email != "" && !isValidEmail(reqData.Email) {
 				errors["email"] = "Invalid email!"
 			}
-			if reqData.Mobile != "" && !isValidMobile(reqData.Mobile) {
-				errors["mobile"] = "Invalid mobile number!"
+			if reqData.Mobile != "" {
+				// Validate country code and length
+				if !strings.HasPrefix(reqData.Mobile, "+") {
+					errors["mobile"] = "Country code is required (e.g., +91XXXXXXXXXX)!"
+				} else {
+					// Extract numeric part (after country code)
+					numberPart := reqData.Mobile
+					// remove leading + and country code digits
+					for len(numberPart) > 0 && numberPart[0] == '+' {
+						numberPart = numberPart[1:]
+					}
+
+				}
 			}
 		}
-
-		// Validate Password
-		if len(strings.TrimSpace(reqData.Password)) < 8 {
-			errors["password"] = "Password must be at least 8 characters long!"
-		}
-
-		// Respond with errors if any exist
+		validatePassword(reqData.Password, "password", errors)
 		if len(errors) > 0 {
 			return middleware.ValidationErrorResponse(c, errors)
 		}
-
-		// Pass validated login request to the next middleware
 		c.Locals("validatedUser", reqData)
 		return c.Next()
 	}
@@ -116,31 +183,18 @@ func SendOTP() fiber.Handler {
 			Mobile string `json:"mobile"`
 			Email  string `json:"email"`
 		})
-
 		if err := c.BodyParser(reqData); err != nil {
 			return middleware.JsonResponse(c, fiber.StatusBadRequest, false, "Invalid request body!", nil)
 		}
-
 		errors := make(map[string]string)
-
+		reqData.Email = cleanEmail(reqData.Email)
+		reqData.Mobile = cleanMobile(reqData.Mobile)
 		// Validate credentials
-		if reqData.Email == "" && reqData.Mobile == "" {
-			errors["credentials"] = "Either email or mobile number is required!"
-		} else {
-			if reqData.Email != "" && !isValidEmail(reqData.Email) {
-				errors["email"] = "Invalid email!"
-			}
-			if reqData.Mobile != "" && !isValidMobile(reqData.Mobile) {
-				errors["mobile"] = "Invalid mobile number!"
-			}
-		}
-
+		validateSingleCredential(reqData.Email, reqData.Mobile, "email", "mobile", errors)
 		// Respond with errors if any exist
 		if len(errors) > 0 {
 			return middleware.ValidationErrorResponse(c, errors)
 		}
-
-		// Pass validated login request to the next middleware
 		c.Locals("validatedUser", reqData)
 		return c.Next()
 	}
@@ -154,41 +208,23 @@ func VerifyOTP() fiber.Handler {
 			Email  string `json:"email"`
 			Code   string `json:"code"`
 		})
-
 		// Parse the request body into reqData
 		if err := c.BodyParser(reqData); err != nil {
 			return middleware.JsonResponse(c, fiber.StatusBadRequest, false, "Invalid request body!", nil)
 		}
-
 		// Initialize a map to collect validation errors
 		errors := make(map[string]string)
-
+		reqData.Email = cleanEmail(reqData.Email)
+		reqData.Code = strings.TrimSpace(reqData.Code)
+		reqData.Mobile = cleanMobile(reqData.Mobile)
 		// Validate that either email or mobile is provided
-		if reqData.Email == "" && reqData.Mobile == "" {
-			errors["credentials"] = "Either email or mobile number is required!"
-		} else {
-			// Validate email if provided
-			if reqData.Email != "" && !isValidEmail(reqData.Email) {
-				errors["email"] = "Invalid email!"
-			}
-
-			// Validate mobile number if provided
-			if reqData.Mobile != "" && !isValidMobile(reqData.Mobile) {
-				errors["mobile"] = "Invalid mobile number!"
-			}
-		}
-
-		// Validate OTP code
+		validateSingleCredential(reqData.Email, reqData.Mobile, "email", "mobile", errors)
 		if reqData.Code == "" {
 			errors["code"] = "OTP code is required!"
 		}
-
-		// If validation errors exist, return them
 		if len(errors) > 0 {
 			return middleware.ValidationErrorResponse(c, errors)
 		}
-
-		// Store validated data and pass to the next middleware
 		c.Locals("validatedUser", reqData)
 		return c.Next()
 	}
@@ -203,56 +239,89 @@ func ResetPassword() fiber.Handler {
 		if err := c.BodyParser(reqData); err != nil {
 			return middleware.JsonResponse(c, fiber.StatusBadRequest, false, "Invalid request body!", nil)
 		}
-
 		errors := make(map[string]string)
-
-		// Validate Password
-		if len(strings.TrimSpace(reqData.Password)) < 8 {
-			errors["password"] = "Password must be at least 8 characters long!"
-		}
-
-		// Respond with errors if any exist
+		validatePassword(reqData.Password, "password", errors)
 		if len(errors) > 0 {
 			return middleware.ValidationErrorResponse(c, errors)
 		}
-
-		// Pass validated login request to the next middleware
 		c.Locals("validatedUser", reqData)
 		return c.Next()
 	}
 }
-
-// Validate new mobile/email input
-func ChangeMobileEmail() fiber.Handler {
+func Login2FA() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		reqData := new(struct {
-			NewMobile string `json:"new_mobile"`
-			NewEmail  string `json:"new_email"`
+		req := new(struct {
+			Code string `json:"code"`
 		})
 
-		if err := c.BodyParser(reqData); err != nil {
+		if err := c.BodyParser(req); err != nil {
 			return middleware.JsonResponse(c, fiber.StatusBadRequest, false, "Invalid request body!", nil)
 		}
+		// fmt.Println("RAW BODY:", string(c.Body()))
+		// fmt.Println("Parsed UserID:", req.UserID)
+		// fmt.Println("Parsed Code:", req.Code)
 
 		errors := make(map[string]string)
-
-		// Validate new email or mobile
-		if reqData.NewEmail == "" && reqData.NewMobile == "" {
-			errors["new_contact"] = "New mobile or email is required!"
-		} else {
-			if reqData.NewEmail != "" && !isValidEmail(reqData.NewEmail) {
-				errors["new_email"] = "Invalid email format!"
-			}
-			if reqData.NewMobile != "" && !isValidMobile(reqData.NewMobile) {
-				errors["new_mobile"] = "Invalid mobile format!"
-			}
+		if strings.TrimSpace(req.Code) == "" {
+			errors["code"] = "2FA code is required!"
 		}
 
 		if len(errors) > 0 {
 			return middleware.ValidationErrorResponse(c, errors)
 		}
 
-		c.Locals("validatedUser", reqData)
+		c.Locals("validated2FA", req)
+		return c.Next()
+	}
+}
+
+// Change Contact Validation
+// Validate New Contact for Sending OTP
+func ValidateNewContact() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		reqData := new(struct {
+			NewEmail  string `json:"new_email"`
+			NewMobile string `json:"new_mobile"`
+		})
+		if err := c.BodyParser(reqData); err != nil {
+			return middleware.JsonResponse(c, fiber.StatusBadRequest, false, "Invalid request body!", nil)
+		}
+		errors := make(map[string]string)
+		reqData.NewEmail = cleanEmail(reqData.NewEmail)
+		reqData.NewMobile = cleanMobile(reqData.NewMobile)
+		// Validate credentials
+		validateSingleCredential(reqData.NewEmail, reqData.NewMobile, "new_email", "new_mobile", errors)
+		if len(errors) > 0 {
+			return middleware.ValidationErrorResponse(c, errors)
+		}
+		c.Locals("validatedNewContact", reqData)
+		return c.Next()
+	}
+}
+
+// Validate OTP for old contact verification
+func ValidateNewContactOTP() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		reqData := new(struct {
+			Code      string `json:"code"`
+			NewEmail  string `json:"new_email"`
+			NewMobile string `json:"new_mobile"`
+		})
+		if err := c.BodyParser(reqData); err != nil {
+			return middleware.JsonResponse(c, fiber.StatusBadRequest, false, "Invalid request body!", nil)
+		}
+		errors := make(map[string]string)
+		reqData.NewEmail = cleanEmail(reqData.NewEmail)
+		reqData.NewMobile = cleanMobile(reqData.NewMobile)
+		// Validate that either email or mobile is provided
+		validateSingleCredential(reqData.NewEmail, reqData.NewMobile, "new_email", "new_mobile", errors)
+		if reqData.Code == "" {
+			errors["code"] = "OTP code is required!"
+		}
+		if len(errors) > 0 {
+			return middleware.ValidationErrorResponse(c, errors)
+		}
+		c.Locals("validatedNewOTP", reqData)
 		return c.Next()
 	}
 }

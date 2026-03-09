@@ -1,93 +1,300 @@
 package utils
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"fib/config"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/sendgrid/sendgrid-go"
 	"github.com/sendgrid/sendgrid-go/helpers/mail"
 )
 
-// GenerateOTP generates a 6-digit OTP
+type OTPPurpose string
+
+const (
+	OTPLogin               OTPPurpose = "login"
+	OTPContactVerification OTPPurpose = "contact_verification"
+	OTPPasswordReset       OTPPurpose = "password_reset"
+	OTPVerifyOldContact    OTPPurpose = "verify_old_contact"
+	OTPVerifyNewContact    OTPPurpose = "verify_new_contact"
+)
+
 func GenerateOTP() string {
-	rng := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new random number generator
-	otp := ""
-	for i := 0; i < 6; i++ {
-		otp += fmt.Sprintf("%d", rng.Intn(10)) // Generate a random digit (0-9) and append to OTP string
+
+	var otp [6]byte
+
+	for i := range otp {
+
+		n, err := rand.Int(rand.Reader, big.NewInt(10))
+
+		if err != nil {
+
+			log.Printf("crypto rand error: %v", err)
+
+			h := sha256.Sum256([]byte(fmt.Sprintf("%d-%d", time.Now().UnixNano(), i)))
+
+			otp[i] = '0' + (h[i] % 10)
+
+		} else {
+
+			otp[i] = byte(n.Int64()) + '0'
+
+		}
+
 	}
-	return otp
+
+	return string(otp[:])
+
 }
 
-func SendOTPToMobile(mobile, otp string) error {
-	// Construct the SMS message
-	smsMsg := fmt.Sprintf("OTP for Credbull App Registration is %s. Do not share it with anyone.", otp)
+func SendOTPToMobile(mobile, otp string, purpose OTPPurpose) error {
 
-	data := url.Values{}
-	data.Set("apikey", config.AppConfig.LocalTextApi) // Replace with your actual API key
-	data.Set("numbers", mobile)
-	data.Set("sender", "CRDBUL")
-	data.Set("message", smsMsg)
+	message := buildOTPSMS(purpose, otp)
 
-	// Make the API request
-	resp, err := http.PostForm(config.AppConfig.LocalTextApiUrl, data)
+	params := url.Values{}
+	params.Set("apikey", config.AppConfig.AOCSmsApiKey)
+	params.Set("type", "TRANS")
+	params.Set("text", message)
+	params.Set("to", mobile)
+	params.Set("sender", config.AppConfig.AOCSmsSender)
+
+	apiURL := fmt.Sprintf("%s?%s", config.AppConfig.AOCSmsApiURL, params.Encode())
+
+	resp, err := http.Get(apiURL)
+
 	if err != nil {
-		log.Printf("Error while sending OTP: %v", err)
+
+		log.Println("SMS send error:", err)
+
 		return err
+
 	}
+
 	defer resp.Body.Close()
 
-	// Check if the response status code is not OK
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to send OTP, response code: %d", resp.StatusCode)
-		return fmt.Errorf("failed to send OTP")
+
+		log.Println("SMS failed:", resp.StatusCode)
+
+		return fmt.Errorf("failed to send SMS")
+
 	}
 
-	log.Println("OTP sent successfully to", mobile)
+	log.Printf("OTP SMS sent to %s (%s)", mobile, purpose)
+
 	return nil
+
 }
 
-type EmailContent struct {
-	Subject string
-	HTML    string
-}
+func buildOTPSMS(purpose OTPPurpose, otp string) string {
 
-func SendOTPEmail(otp, email string) error {
-	// Create email content
-	subject := "Your OTP Code"
-	htmlContent := "<p>Your OTP code is: <strong>" + otp + "</strong></p>"
-	content := EmailContent{
-		Subject: subject,
-		HTML:    htmlContent,
+	expiry := config.AppConfig.OTPExpiryMinutes
+
+	switch purpose {
+
+	case OTPPasswordReset:
+
+		return fmt.Sprintf(
+			"Use OTP %s to reset your User password. Valid for %d minutes. Do not share.",
+			otp, expiry,
+		)
+
+	case OTPLogin:
+
+		return fmt.Sprintf(
+			"Your User login OTP is %s. Valid for %d minutes. Do not share.",
+			otp, expiry,
+		)
+
+	case OTPVerifyOldContact:
+
+		return fmt.Sprintf(
+			"Verify your old contact with OTP %s for User account update. Valid for %d minutes.",
+			otp, expiry,
+		)
+
+	case OTPVerifyNewContact:
+
+		return fmt.Sprintf(
+			"Verify your new contact with OTP %s for User account update. Valid for %d minutes.",
+			otp, expiry,
+		)
+
+	case OTPContactVerification:
+
+		return fmt.Sprintf(
+			"OTP for User app registration is %s. Do not share it with anyone.",
+			otp,
+		)
+
+	default:
+
+		return fmt.Sprintf(
+			"Your User OTP is %s. Valid for %d minutes.",
+			otp, expiry,
+		)
+
 	}
 
-	// Create the sender and recipient email objects
-	from := mail.NewEmail(config.AppConfig.SandgridSenderName, config.AppConfig.SendgridSenderMail)
-	toEmail := mail.NewEmail("", email)
+}
 
-	// Construct the email message
-	message := mail.NewSingleEmail(from, content.Subject, toEmail, "", content.HTML)
+const EmailTemplate = `
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:30px 0;font-family:Arial, sans-serif;">
+<tr>
+<td align="center">
 
-	// Initialize the SendGrid client
+<table width="500" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;padding:30px;">
+
+<tr>
+<td align="center">
+<h2>{purpose}</h2>
+</td>
+</tr>
+
+<tr>
+<td>
+
+<p>Hello {userid},</p>
+
+<p>Your One Time Password (OTP) is:</p>
+
+<p style="font-size:30px;font-weight:bold;text-align:center;letter-spacing:6px;">
+{code}
+</p>
+
+<p>This OTP expires in <b>{expiry} minutes</b>.</p>
+
+<p>Please do not share this code with anyone.</p>
+
+<p>If you did not request this, please ignore this email.</p>
+
+<br>
+
+<p>Regards,<br>
+<b>User Team</b></p>
+
+</td>
+</tr>
+
+<tr>
+<td style="text-align:center;font-size:13px;color:#777;padding-top:20px;border-top:1px solid #eee;">
+
+Need help? contact support@user.com
+
+<br><br>
+
+© 2026 User. All rights reserved.
+
+</td>
+</tr>
+
+</table>
+
+</td>
+</tr>
+</table>
+`
+
+func SendOTPEmail(email, username, otp string, purpose OTPPurpose) error {
+
+	subject, plain, html := buildOTPEmail(username, purpose, otp)
+
+	from := mail.NewEmail(
+		config.AppConfig.SendgridSenderName,
+		config.AppConfig.SendgridSenderMail,
+	)
+
+	to := mail.NewEmail("", email)
+
+	message := mail.NewSingleEmail(from, subject, to, plain, html)
+
 	client := sendgrid.NewSendClient(config.AppConfig.SendgridApiKey)
 
-	// Send the email
 	response, err := client.Send(message)
+
 	if err != nil {
-		log.Println("Error sending email:", err)
+
+		log.Println("Email send error:", err)
+
 		return err
+
 	}
 
-	// Log response details
-	if response.StatusCode >= 200 && response.StatusCode < 300 {
-		log.Println("Email sent successfully:", response.StatusCode)
-	} else {
-		log.Println("Failed to send email. Status code:", response.StatusCode)
-		log.Println("Response body:", response.Body)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+
+		log.Println("Email failed:", response.StatusCode, response.Body)
+
+		return fmt.Errorf("failed to send email")
+
 	}
+
+	log.Printf("OTP email sent to %s (%s)", email, purpose)
+
 	return nil
+
+}
+
+func buildOTPEmail(username string, purpose OTPPurpose, otp string) (subject, plain, html string) {
+
+	expiry := config.AppConfig.OTPExpiryMinutes
+
+	expiryStr := fmt.Sprintf("%d", expiry)
+
+	purposeDisplay := ""
+
+	switch purpose {
+
+	case OTPPasswordReset:
+
+		subject = "Reset Your Password"
+		purposeDisplay = "Reset Your Password"
+
+	case OTPLogin:
+
+		subject = "User Login Verification"
+		purposeDisplay = "User Login Verification"
+
+	case OTPVerifyOldContact:
+
+		subject = "Verify Old Contact"
+		purposeDisplay = "Verify Old Contact"
+
+	case OTPVerifyNewContact:
+
+		subject = "Verify New Contact"
+		purposeDisplay = "Verify New Contact"
+
+	case OTPContactVerification:
+
+		subject = "Verify Your Email"
+		purposeDisplay = "Verify Your Email"
+
+	default:
+
+		subject = "Your OTP Code"
+		purposeDisplay = "Your OTP Code"
+
+	}
+
+	plain = fmt.Sprintf(
+		"Hello %s,\n\nYour OTP is %s.\nIt expires in %d minutes.\n\nIf you didn't request this please ignore this email.",
+		username,
+		otp,
+		expiry,
+	)
+
+	html = strings.ReplaceAll(EmailTemplate, "{purpose}", purposeDisplay)
+	html = strings.ReplaceAll(html, "{userid}", username)
+	html = strings.ReplaceAll(html, "{expiry}", expiryStr)
+	html = strings.ReplaceAll(html, "{code}", otp)
+
+	return
+
 }
